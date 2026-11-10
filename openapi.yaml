@@ -1,0 +1,975 @@
+openapi: 3.0.3
+info:
+  title: tgclient HTTP API
+  version: 0.1.0
+  description: |
+    Local control API of an automated Telegram client (userbot).
+
+    Sending goes to Telegram; reading is served from the client's local database, which
+    holds live updates since the client started plus whatever a backfill has pulled.
+
+    Timestamps are epoch milliseconds UTC. chatId is Telegram's chat id: positive for
+    private chats (equal to the user id), negative for groups, supergroups and channels.
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default local binding
+
+security:
+  - ApiToken: []
+
+tags:
+  - name: system
+  - name: messages
+  - name: chats
+  - name: search
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness and stored message count
+      security: []
+      responses:
+        "200":
+          description: The client is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  messages:
+                    type: integer
+                    format: int64
+                    description: Rows in the messages table
+                    example: 1843
+
+  /messages/text:
+    post:
+      tags: [messages]
+      summary: Send a text message
+      description: |
+        Waits for Telegram to confirm the message, so the returned messageId is final and
+        matches the database. Costs tens to hundreds of milliseconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendTextRequest"
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SentMessage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/photo:
+    post:
+      tags: [messages]
+      summary: Send a photo
+      description: Displayed inline and re-encoded by Telegram. Use /messages/document to preserve the file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendFileRequest"
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SentMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/video:
+    post:
+      tags: [messages]
+      summary: Send a video
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendFileRequest"
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SentMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/document:
+    post:
+      tags: [messages]
+      summary: Send a file as a document
+      description: Preserves the file exactly, with no re-encoding.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendFileRequest"
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SentMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/album:
+    post:
+      tags: [messages]
+      summary: Send several files as one grouped message
+      description: |
+        Telegram allows 2 to 10 items; photos and videos may be mixed, documents may not be
+        mixed with them. Most clients show only the first caption for the group.
+
+        The returned ids are confirmed ones: Telegram's album call has no built-in
+        wait-for-confirmation mode, so the client waits for each acknowledgement, which
+        makes an album slower than a single send.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chatId, items]
+              properties:
+                chatId:
+                  type: integer
+                  format: int64
+                items:
+                  type: array
+                  minItems: 2
+                  maxItems: 10
+                  items:
+                    $ref: "#/components/schemas/AlbumItem"
+                replyToMessageId:
+                  type: integer
+                  format: int64
+                  default: 0
+      responses:
+        "200":
+          description: Album sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chatId:
+                    type: integer
+                    format: int64
+                  messageIds:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/copy:
+    post:
+      tags: [messages]
+      summary: Copy messages to another chat without attribution
+      description: |
+        The "copy" of Telegram's context menu: the message arrives without the
+        "forwarded from" header. Identical to /messages/forward with sendCopy true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fromChatId, toChatId, messageIds]
+              properties:
+                fromChatId:
+                  type: integer
+                  format: int64
+                toChatId:
+                  type: integer
+                  format: int64
+                messageIds:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                removeCaption:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Copied, with the ids of the new messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  toChatId:
+                    type: integer
+                    format: int64
+                  messageIds:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/react:
+    post:
+      tags: [messages]
+      summary: Add an emoji reaction
+      description: |
+        Emoji reactions only — custom premium reactions are not supported. Chats can
+        restrict which emoji are allowed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactionRequest"
+      responses:
+        "200":
+          description: Reaction added
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/unreact:
+    post:
+      tags: [messages]
+      summary: Remove one of your reactions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactionRequest"
+      responses:
+        "200":
+          description: Reaction removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /chats/{chatId}/read:
+    post:
+      tags: [chats]
+      summary: Mark messages as read
+      description: |
+        With no body the newest stored message in the chat is marked read, which is enough
+        to clear the unread badge. Reading is forced, so it also produces a read receipt
+        for the other side.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messageIds:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+      responses:
+        "200":
+          description: Marked as read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chatId:
+                    type: integer
+                    format: int64
+                  read:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/edit:
+    post:
+      tags: [messages]
+      summary: Edit a message's text or media caption
+      description: |
+        Your own messages only, and only while Telegram still allows editing. Editing text
+        and editing a caption are different Telegram operations; the client inspects the
+        current content and picks the right one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chatId, messageId, text]
+              properties:
+                chatId:
+                  type: integer
+                  format: int64
+                messageId:
+                  type: integer
+                  format: int64
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Edited
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chatId:
+                    type: integer
+                    format: int64
+                  messageId:
+                    type: integer
+                    format: int64
+                  edited:
+                    type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/delete:
+    post:
+      tags: [messages]
+      summary: Delete messages
+      description: |
+        Stored rows are kept and flagged deleted, so history stays intact.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chatId, messageIds]
+              properties:
+                chatId:
+                  type: integer
+                  format: int64
+                messageIds:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                revoke:
+                  type: boolean
+                  default: false
+                  description: Delete for everyone rather than only your own copy. Time-limited by Telegram.
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chatId:
+                    type: integer
+                    format: int64
+                  deleted:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/forward:
+    post:
+      tags: [messages]
+      summary: Forward messages to another chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fromChatId, toChatId, messageIds]
+              properties:
+                fromChatId:
+                  type: integer
+                  format: int64
+                toChatId:
+                  type: integer
+                  format: int64
+                messageIds:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                sendCopy:
+                  type: boolean
+                  default: false
+                  description: Send as your own message, without the "forwarded from" header.
+                removeCaption:
+                  type: boolean
+                  default: false
+                  description: Drop media captions; only meaningful with sendCopy.
+      responses:
+        "200":
+          description: Forwarded, with the ids of the new messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  toChatId:
+                    type: integer
+                    format: int64
+                  messageIds:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/pin:
+    post:
+      tags: [messages]
+      summary: Pin a message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinRequest"
+      responses:
+        "200":
+          description: Pinned
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /messages/unpin:
+    post:
+      tags: [messages]
+      summary: Unpin a message
+      description: Same body as /messages/pin; the flags are ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinRequest"
+      responses:
+        "200":
+          description: Unpinned
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /chats:
+    get:
+      tags: [chats]
+      summary: List known chats, most recently updated first
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Chats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Chat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /chats/{chatId}/messages:
+    get:
+      tags: [chats]
+      summary: Stored messages of one chat, newest first
+      description: Paginate by passing the last messageId of a page as the next `before`.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: before
+          in: query
+          description: Return messages with a smaller messageId; 0 starts from the newest.
+          schema:
+            type: integer
+            format: int64
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /chats/{chatId}/backfill:
+    post:
+      tags: [chats]
+      summary: Pull history for one chat in the background
+      description: |
+        Returns immediately; a full chat can take minutes. Safe to call repeatedly — a
+        cursor in sync_state resumes where the previous run stopped. Competes with
+        Telegram's rate limits, so avoid fanning out across many chats at once.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: max
+          in: query
+          description: Stop after this many messages in this run.
+          schema:
+            type: integer
+            default: 1000
+      responses:
+        "202":
+          description: Backfill started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chatId:
+                    type: integer
+                    format: int64
+                  max:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /media/{chatId}/{messageId}/{fileUniqueId}:
+    get:
+      tags: [messages]
+      summary: Download an attachment's bytes
+      description: |
+        Serves photos, videos, documents, audio, voice notes and animations.
+
+        If the file is not on the client's disk yet it is downloaded from Telegram during
+        the request and cached, so the first call on a large file can be slow. Setting
+        media.autoDownload in the config pulls incoming attachments in the background
+        instead.
+
+        The response is a seekable stream: Range requests work, so the URL can be used
+        directly as a video source.
+
+        Prefer the `url` field of an attachment over building this path by hand.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: fileUniqueId
+          in: path
+          required: true
+          description: Stable across restarts, unlike TDLib's numeric file id.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File contents
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: inline; filename="photo.jpg"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial content, in response to a Range request
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The file could not be retrieved from Telegram
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /search:
+    get:
+      tags: [search]
+      summary: Full-text search over stored messages
+      description: |
+        The query is treated as a literal phrase, so arbitrary user text is safe to pass
+        through. Only messages with text or a caption are indexed; deleted ones are excluded.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: chatId
+          in: query
+          description: Restrict to one chat.
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Matching messages, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    ApiToken:
+      type: apiKey
+      in: header
+      name: X-Api-Token
+      description: Value of api.token from config.yaml. If that is empty, the check is disabled.
+
+  responses:
+    BadRequest:
+      description: Bad parameters or missing file
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or wrong X-Api-Token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: invalid token
+    ServerError:
+      description: Telegram-side or internal failure; the stack trace is in the client log
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+    SendTextRequest:
+      type: object
+      required: [chatId, text]
+      properties:
+        chatId:
+          type: integer
+          format: int64
+          example: 1234567890
+        text:
+          type: string
+        replyToMessageId:
+          type: integer
+          format: int64
+          default: 0
+          description: 0 means the message is not a reply.
+
+    SendFileRequest:
+      type: object
+      required: [chatId, path]
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        path:
+          type: string
+          description: |
+            Path on the machine running the client — this is not a file upload.
+          example: C:/media/photo.jpg
+        caption:
+          type: string
+          nullable: true
+        replyToMessageId:
+          type: integer
+          format: int64
+          default: 0
+
+    AlbumItem:
+      type: object
+      required: [path]
+      properties:
+        type:
+          type: string
+          enum: [photo, video, document]
+          default: photo
+        path:
+          type: string
+          description: Path on the machine running the client.
+        caption:
+          type: string
+          nullable: true
+
+    ReactionRequest:
+      type: object
+      required: [chatId, messageId, emoji]
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        messageId:
+          type: integer
+          format: int64
+        emoji:
+          type: string
+          example: "👍"
+        big:
+          type: boolean
+          default: false
+          description: Play the oversized animation for everyone in the chat.
+
+    PinRequest:
+      type: object
+      required: [chatId, messageId]
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        messageId:
+          type: integer
+          format: int64
+        disableNotification:
+          type: boolean
+          default: false
+        onlyForSelf:
+          type: boolean
+          default: false
+          description: |
+            Pin only in your own view. In a group where you lack pin rights this is the
+            only variant that succeeds.
+
+    SentMessage:
+      type: object
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        messageId:
+          type: integer
+          format: int64
+          description: Final, server-confirmed id.
+        date:
+          type: integer
+          format: int64
+
+    Chat:
+      type: object
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        type:
+          type: string
+          enum: [private, basicgroup, supergroup, secret]
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        updatedAt:
+          type: integer
+          format: int64
+
+    Message:
+      type: object
+      properties:
+        chatId:
+          type: integer
+          format: int64
+        messageId:
+          type: integer
+          format: int64
+        senderId:
+          type: integer
+          format: int64
+        senderType:
+          type: string
+          enum: [user, chat]
+          nullable: true
+        date:
+          type: integer
+          format: int64
+        editDate:
+          type: integer
+          format: int64
+          description: 0 when never edited.
+        replyToMessageId:
+          type: integer
+          format: int64
+        contentType:
+          type: string
+          example: photo
+          description: text, photo, video, document, audio, voicenote, animation, sticker, ...
+        text:
+          type: string
+          nullable: true
+          description: Message text or media caption.
+        rawJson:
+          type: string
+          nullable: true
+          description: TDLib's full content representation; only when storage.storeRaw is true.
+        outgoing:
+          type: boolean
+        deleted:
+          type: boolean
+          description: Deleted in Telegram; the row is kept for history.
+        media:
+          type: array
+          description: Attachments; empty for text messages.
+          items:
+            $ref: "#/components/schemas/Attachment"
+        reactions:
+          type: array
+          description: |
+            Reaction buckets, replaced as a whole set whenever Telegram sends an update.
+            Captured from live updates and from the history backfill.
+          items:
+            $ref: "#/components/schemas/Reaction"
+
+    Reaction:
+      type: object
+      properties:
+        emoji:
+          type: string
+          description: |
+            The reaction. Custom (premium) reactions appear as `custom:<id>`, paid ones as
+            `paid`.
+          example: "👍"
+        count:
+          type: integer
+          description: How many accounts reacted with it.
+        chosen:
+          type: boolean
+          description: Whether this account is one of them.
+        recentSenderIds:
+          type: array
+          description: |
+            The few reactors Telegram discloses — often empty, and normally empty in large
+            chats. Not a way to enumerate everyone who reacted.
+          items:
+            type: integer
+            format: int64
+
+    Attachment:
+      type: object
+      properties:
+        fileUniqueId:
+          type: string
+          description: Stable identifier, also the last path segment of `url`.
+        kind:
+          type: string
+          enum: [photo, video, document, audio, voice, animation]
+        mimeType:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          format: int64
+        downloaded:
+          type: boolean
+          description: Whether the bytes are already on the client's disk. Fetching works either way.
+        url:
+          type: string
+          description: Path to fetch the bytes; append to the base URL.
+          example: /media/1234567890/303038464/AQADexampleFileId

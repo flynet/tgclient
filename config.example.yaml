@@ -1,0 +1,107 @@
+# tgclient configuration.
+# Copy to config.yaml (gitignored) and fill in the two Telegram credentials.
+# Every secret can also come from the environment, which wins over this file:
+#   TG_API_ID  TG_API_HASH  TG_PHONE  TG_LOGIN_METHOD  TG_API_TOKEN
+# Relative paths resolve against the working directory the client is started in.
+
+telegram:
+  # Application credentials from https://my.telegram.org -> API development tools.
+  # They identify the app, not the account; obtained once, by hand. apiHash is a secret.
+  apiId: 0
+  apiHash: ""
+
+  # How the FIRST login happens. Later starts reuse the session and ask nothing.
+  #   console — ask for the phone number and the login code on the console
+  #   qr      — print a tg://login link and an ASCII QR code; confirm from a logged-in
+  #             Telegram app (Settings -> Devices -> Link Desktop Device). No SMS code.
+  #   phone   — use the number below, type the code on the console
+  # A cloud (2FA) password is asked on the console in ALL three cases, including qr:
+  # scanning proves you hold a logged-in device, not that you know the password.
+  loginMethod: "console"
+
+  # Used by loginMethod: phone. International format, e.g. "+491701234567".
+  phone: ""
+
+  # TDLib session database. THIS DIRECTORY IS THE ACCOUNT — anyone with a copy is logged
+  # in as you. Never commit it, never put it on a shared drive. Deleting it means
+  # authenticating again; back it up like a password.
+  sessionDir: "td-data/session"
+
+  # Where TDLib stores downloaded media. Point it anywhere you like; the database only
+  # ever keeps paths, never file bytes.
+  filesDir: "td-data/files"
+
+  # Shown in Telegram under Settings -> Devices, so you can recognise this session.
+  deviceModel: "tgclient"
+  applicationVersion: "0.1.0"
+
+  # Telegram's test servers. Leave false unless you know you need them — the test
+  # datacenter has separate accounts and separate data.
+  useTestDatacenter: false
+
+  # Open every known chat at startup so Telegram streams reactions and view counts live.
+  # Telegram only pushes that data for chats a client has explicitly opened, so without
+  # this OTHER PEOPLE'S reactions appear only after a backfill. Reactions made by this
+  # account are refreshed immediately either way. Costs extra update traffic.
+  trackInteractions: false
+
+storage:
+  # sqlite (embedded, no server) or postgres. Nothing above the storage layer knows the
+  # difference, so switching is this one line plus the postgres adapter.
+  driver: "sqlite"
+
+  # SQLite database file. Two siblings appear next to it (-wal and -shm) and belong to
+  # it: copy all three together, or stop the client before backing up.
+  sqlitePath: "data/tgclient.db"
+
+  # Used only when driver is postgres.
+  jdbcUrl: ""
+  username: ""
+  password: ""
+
+  # Connections for reads (HTTP queries, search). Writes always use a single dedicated
+  # connection — SQLite cannot parallelise them anyway.
+  readPoolSize: 4
+
+  # Queue between the update stream and the database writer. When it fills up, update
+  # handlers block rather than drop data: falling behind is recoverable, losing messages
+  # is not. Raise it if you see "Write queue is full" warnings under bursts.
+  writeQueueCapacity: 50000
+
+  # Rows committed per transaction. Higher means better throughput and slightly staler
+  # reads; committing per message would mean an fsync per message.
+  writeBatchSize: 500
+
+  # How long the writer waits to fill a batch before committing what it has.
+  writeFlushIntervalMs: 200
+
+  # Store TDLib's full representation of every message content in the raw_json column.
+  # Heavy — it is by far the largest column. Enable only if you need the original payload.
+  storeRaw: false
+
+api:
+  # The client's own HTTP control API (unrelated to Telegram's API above).
+  enabled: true
+
+  # 127.0.0.1 keeps it reachable only from this machine. Before changing this, set a
+  # token: the API can read every conversation and post as you, and there is no TLS.
+  host: "127.0.0.1"
+  port: 8080
+
+  # Required in the X-Api-Token header on every endpoint except /health.
+  # Empty disables the check entirely — acceptable only while bound to 127.0.0.1.
+  token: ""
+
+media:
+  # Download incoming attachments in the background as they arrive. Own outgoing files
+  # are never downloaded — they already exist on this machine. Without this, files are
+  # fetched on demand the first time GET /media/... asks for them, which makes that
+  # first request slow for large videos.
+  autoDownload: false
+
+  # Skip auto-downloading files larger than this, in bytes. 0 = no limit.
+  # On-demand fetches ignore this: asking for a file explicitly always downloads it.
+  maxFileSize: 52428800
+
+  # Concurrent downloads.
+  workers: 2

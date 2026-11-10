@@ -1,0 +1,43 @@
+# --- Build output -------------------------------------------------------------
+target/
+out/
+*.class
+
+# --- IDE ----------------------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# --- Secrets: local configuration --------------------------------------------
+# config.yaml holds the Telegram api_hash and the API token.
+config.yaml
+config.yaml.*
+*.env
+.env.*
+# Plain-text notes with credentials (my.telegram.org output).
+Auth
+auth.txt
+credentials*
+
+# --- The account itself -------------------------------------------------------
+# td-data/session is the authorised TDLib session: a copy of it is a login.
+td-data/
+*.binlog
+
+# --- Local data: the message database and downloaded files --------------------
+data/
+downloads/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Logs, OS junk, agent scratch --------------------------------------------
+*.log
+logs/
+.DS_Store
+Thumbs.db
+.dsh-*

@@ -1,0 +1,12 @@
+# Normalise every text file to LF in the repository, whatever the checkout OS
+# uses. Java, YAML and Markdown are all fine with LF; the TDLib native binary is
+# declared binary so git never touches it.
+* text=auto eol=lf
+
+*.jar  binary
+*.dll  binary
+*.so   binary
+*.dylib binary
+*.png  binary
+*.jpg  binary
+*.db   binary
